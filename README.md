@@ -24,6 +24,8 @@
 
 ## 📸 Aperçu
 
+![image](https://github.com/kazypanel/PanelStats/blob/main/IMG_1205.jpg)
+
 ```
 ┌─────────────────────────────────────────────────────────┐
 │  🖥 PanelStats          ● LIVE   12:34:56   🌙 Sombre   │
