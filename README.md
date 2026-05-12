@@ -25,6 +25,9 @@
 ## 📸 Aperçu
 
 ![image](https://github.com/kazypanel/PanelStats/blob/main/IMG_1205.jpg)
+![image](https://github.com/kazypanel/PanelStats/blob/main/ecran2.png)
+![image](https://github.com/kazypanel/PanelStats/blob/main/ecran3.png)
+![image](https://github.com/kazypanel/PanelStats/blob/main/ecran4.png)
 
 ```
 ┌─────────────────────────────────────────────────────────┐
