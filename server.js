@@ -64,6 +64,53 @@ app.get('/api/files', async (req, res) => {
   } catch (e) { res.status(500).json({ error: 'Erreur lecture repertoire' }); }
 });
 
+// ─── API TIMESHIFT ────────────────────────────────────────────
+app.get('/api/timeshift', async (req, res) => {
+  const TIMESHIFT_DIR = '/timeshift';
+  try {
+    // Disk usage of /timeshift via du
+    let dirSize = 0;
+    try {
+      const du = await execPromise('du -sb ' + TIMESHIFT_DIR + ' 2>/dev/null | cut -f1');
+      dirSize = parseInt(du) || 0;
+    } catch (_) {
+      // fallback: recursive scan
+      dirSize = await getDirectorySize(TIMESHIFT_DIR);
+    }
+
+    // Filesystem quota of the partition that contains /timeshift
+    let fsTotal = 0, fsUsed = 0, fsFree = 0, fsPercent = 0, fsMount = '', fsDevice = '';
+    try {
+      const df = await execPromise("df -B1 " + TIMESHIFT_DIR + " | awk 'NR==2{print $1, $2, $3, $4, $5, $6}'");
+      const p = df.split(' ');
+      fsDevice  = p[0] || '';
+      fsTotal   = parseInt(p[1]) || 0;
+      fsUsed    = parseInt(p[2]) || 0;
+      fsFree    = parseInt(p[3]) || 0;
+      fsPercent = parseInt(p[4]) || 0;
+      fsMount   = p[5] || '';
+    } catch (_) {}
+
+    // Snapshot count
+    let snapshotCount = 0;
+    try {
+      const ls = await execPromise('ls ' + TIMESHIFT_DIR + '/snapshots 2>/dev/null | wc -l');
+      snapshotCount = parseInt(ls) || 0;
+    } catch (_) {}
+
+    res.json({
+      dirPath: TIMESHIFT_DIR,
+      dirSize,
+      dirSizeFormatted: formatSize(dirSize),
+      filesystem: { device: fsDevice, mount: fsMount, total: fsTotal, used: fsUsed, free: fsFree, percent: fsPercent },
+      snapshotCount,
+      timestamp: Date.now()
+    });
+  } catch (e) {
+    res.status(500).json({ error: 'Erreur lecture /timeshift : ' + e.message });
+  }
+});
+
 // ─── API PM2 ───────────────────────────────────────────────────
 app.get('/api/pm2', async (req, res) => {
   try {
@@ -992,6 +1039,18 @@ tbody td{padding:8px 11px;font-size:11.5px}
 
 <!-- ══ FICHIERS ══ -->
 <div class="tab-panel" id="tab-files">
+
+<!-- Timeshift quota -->
+<div class="panel">
+  <div class="panel-hd">
+    <span><i class="fas fa-clock-rotate-left"></i> Quota /timeshift</span>
+    <button class="btn" onclick="loadTimeshift()" style="padding:4px 10px;font-size:10px"><i class="fas fa-sync"></i> Actualiser</button>
+  </div>
+  <div class="panel-bd" id="timeshift-panel">
+    <div style="color:var(--muted);padding:10px;text-align:center"><i class="fas fa-spinner spin"></i> Chargement...</div>
+  </div>
+</div>
+
 <div class="panel" style="flex:1">
   <div class="panel-hd">
     <span><i class="fas fa-folder-open"></i> ${TARGET_DIR}</span>
@@ -1095,7 +1154,7 @@ function switchTab(key, el) {
   document.getElementById('tab-'+key).classList.add('active');
   document.getElementById('topbar-title').textContent = titles[key] || 'PanelStats';
   if (key==='pm2'    && !pm2Loaded)    { pm2Loaded=true;    loadPm2(); }
-  if (key==='files'  && !filesLoaded)  { filesLoaded=true;  loadFiles(); }
+  if (key==='files'  && !filesLoaded)  { filesLoaded=true;  loadFiles(); loadTimeshift(); }
   if (key==='editor' && !editorLoaded) editorLoad();
   if (key==='cpu')    drawChartSingle('chartCpu2',  histCpu, 'var(--bar-cpu)');
   if (key==='memory') drawChartSingle('chartMem2',  histMem, 'var(--bar-mem)');
@@ -1401,24 +1460,28 @@ async function loadPm2() {
         '<td style="font-size:10px;color:var(--muted);word-break:break-all;font-family:var(--mono)">'+p.script+'</td></tr>';
     }).join('');
 
-    document.getElementById('pm2-tbody').addEventListener('click', function(e) {
-      var btn = e.target.closest('.pm2-btn');
-      if (!btn) return;
-      pm2Action(btn.dataset.action, btn.dataset.id);
-    });
   } catch(e) {
     document.getElementById('pm2-tbody').innerHTML =
       '<tr><td colspan="10" style="text-align:center;padding:22px;color:var(--red)">Erreur : '+e.message+'</td></tr>';
   }
 }
 
+// Listener unique sur le tab PM2 (délégation, jamais réécrit)
+
 async function pm2Action(action, id) {
-  toast('PM2 '+action+' #'+id+'...', 'info');
+  // Désactiver tous les boutons de la ligne pour éviter les doubles clics
+  document.querySelectorAll('.pm2-btn[data-id="'+id+'"]').forEach(function(b) { b.disabled = true; });
+  toast('PM2 ' + action + ' #' + id + '...', 'info');
   try {
-    var r = await fetch('/api/pm2/'+action+'/'+id, {method:'POST'}).then(function(r) { return r.json(); });
-    toast(r.message||'OK', 'success');
+    var resp = await fetch('/api/pm2/' + action + '/' + id, { method: 'POST' });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    var r = await resp.json();
+    toast(r.message || 'OK', 'success');
     setTimeout(loadPm2, 1200);
-  } catch(e) { toast('Erreur : '+e.message, 'error'); }
+  } catch(e) {
+    toast('Erreur PM2 : ' + e.message, 'error');
+    document.querySelectorAll('.pm2-btn[data-id="'+id+'"]').forEach(function(b) { b.disabled = false; });
+  }
 }
 
 // ── FICHIERS ──────────────────────────────────────────────────
@@ -1446,6 +1509,53 @@ async function loadFiles() {
         '</div>';
     }).join('');
   } catch(e) { toast('Erreur fichiers', 'error'); }
+}
+
+// ── TIMESHIFT ─────────────────────────────────────────────────
+async function loadTimeshift() {
+  var el = document.getElementById('timeshift-panel');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--muted);padding:10px;text-align:center"><i class="fas fa-spinner spin"></i> Chargement...</div>';
+  try {
+    var d = await fetch('/api/timeshift').then(function(r) { return r.json(); });
+    if (d.error) { el.innerHTML = '<p style="color:var(--red);padding:10px">' + d.error + '</p>'; return; }
+
+    var fs = d.filesystem;
+    var pct = fs.percent || 0;
+    var barClr = pct < 60 ? 'var(--green)' : pct < 85 ? 'var(--orange)' : 'var(--red)';
+
+    el.innerHTML =
+      '<div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:10px;margin-bottom:12px">' +
+        '<div style="text-align:center">' +
+          '<div style="font-size:22px;font-weight:700;color:var(--blue)">' + d.dirSizeFormatted + '</div>' +
+          '<div style="font-size:10px;color:var(--muted);margin-top:2px">Taille /timeshift</div>' +
+        '</div>' +
+        '<div style="text-align:center">' +
+          '<div style="font-size:22px;font-weight:700;color:var(--text)">' + fmtB(fs.total) + '</div>' +
+          '<div style="font-size:10px;color:var(--muted);margin-top:2px">Partition totale</div>' +
+        '</div>' +
+        '<div style="text-align:center">' +
+          '<div style="font-size:22px;font-weight:700;color:var(--text)">' + fmtB(fs.free) + '</div>' +
+          '<div style="font-size:10px;color:var(--muted);margin-top:2px">Libre</div>' +
+        '</div>' +
+        '<div style="text-align:center">' +
+          '<div style="font-size:22px;font-weight:700;color:' + (d.snapshotCount > 0 ? 'var(--purple)' : 'var(--muted)') + '">' + d.snapshotCount + '</div>' +
+          '<div style="font-size:10px;color:var(--muted);margin-top:2px">Snapshots</div>' +
+        '</div>' +
+      '</div>' +
+      '<div style="margin-bottom:6px;display:flex;justify-content:space-between;font-size:10px;color:var(--muted)">' +
+        '<span>Utilisation partition <strong style="color:var(--text)">' + (fs.mount || '/timeshift') + '</strong> (' + (fs.device || '—') + ')</span>' +
+        '<span style="font-weight:600;color:' + barClr + '">' + pct + '%</span>' +
+      '</div>' +
+      '<div style="height:8px;border-radius:4px;background:var(--gauge-track);overflow:hidden">' +
+        '<div style="height:100%;width:' + pct + '%;background:' + barClr + ';border-radius:4px;transition:width .4s"></div>' +
+      '</div>' +
+      '<div style="margin-top:6px;font-size:9.5px;color:var(--muted);text-align:right">' +
+        fmtB(fs.used) + ' utilisés / ' + fmtB(fs.total) +
+      '</div>';
+  } catch(e) {
+    el.innerHTML = '<p style="color:var(--red);padding:10px">Erreur : ' + e.message + '</p>';
+  }
 }
 
 // ── EDITEUR ───────────────────────────────────────────────────
@@ -1480,6 +1590,13 @@ window.addEventListener('load', function() {
   loadHistory();
   setInterval(loadStats,   5000);
   setInterval(loadHistory, 2000);
+
+  // Délégation PM2 : listener unique sur le tab entier (la table est reconstruite à chaque loadPm2)
+  document.getElementById('tab-pm2').addEventListener('click', function(e) {
+    var btn = e.target.closest('.pm2-btn');
+    if (!btn || btn.disabled) return;
+    pm2Action(btn.dataset.action, btn.dataset.id);
+  });
 });
 
 window.addEventListener('resize', function() {
