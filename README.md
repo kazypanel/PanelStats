@@ -1,24 +1,11 @@
-# 📊 PanelStats
+# PanelStats — System Monitor
 
-> Dashboard de monitoring système auto-hébergé, style **Glassmorphism iOS**, propulsé par **Node.js + Express**.
+> Tableau de bord de supervision système en temps réel, auto-hébergé, construit avec Node.js + Express.
 
-![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?style=flat-square&logo=node.js&logoColor=white)
-![Express](https://img.shields.io/badge/Express-4.x-000000?style=flat-square&logo=express&logoColor=white)
-![PM2](https://img.shields.io/badge/PM2-compatible-2B037A?style=flat-square&logo=pm2&logoColor=white)
-![License](https://img.shields.io/badge/License-MIT-blue?style=flat-square)
-
----
-
-## ✨ Fonctionnalités
-
-- **Overview temps réel** — CPU, RAM, Swap, Disk avec jauges animées
-- **Historique graphique** — courbes CPU & RAM sur 60 secondes glissantes
-- **Multi-disques** — détection automatique de tous les volumes montés
-- **Gestion PM2** — start / stop / restart de tous vos projets Node.js
-- **Explorateur de répertoire** — taille des dossiers et fichiers avec tri
-- **Éditeur intégré** — modifiez et sauvegardez `server.js` depuis le navigateur
-- **Thème Glass clair / sombre** — glassmorphism iOS avec `backdrop-filter`
-- **100% vanilla** — aucune dépendance frontend (zéro build, zéro bundler)
+![Node.js](https://img.shields.io/badge/Node.js-18%2B-339933?logo=node.js&logoColor=white)
+![Express](https://img.shields.io/badge/Express-4.x-000000?logo=express&logoColor=white)
+![PM2](https://img.shields.io/badge/PM2-compatible-2B037A?logo=pm2&logoColor=white)
+![License](https://img.shields.io/badge/Licence-MIT-blue)
 
 ---
 
@@ -29,62 +16,128 @@
 ![image](https://github.com/kazypanel/PanelStats/blob/main/ecran3.png)
 ![image](https://github.com/kazypanel/PanelStats/blob/main/ecran4.png)
 
+PanelStats est un panel de monitoring léger tournant sur **un seul fichier** `server.js`. Il expose une interface web glassmorphism avec thème clair/sombre, accessible depuis n'importe quel navigateur sur votre réseau local.
+
+---
+
+## Fonctionnalités
+
+### Système
+- **Overview** — CPU, RAM, Swap, Disk en jauges animées + graphique historique 60s
+- **CPU** — utilisation par cœur, température, load average
+- **Memory** — RAM utilisée/libre, swap, historique
+- **Disk Usage** — toutes les partitions montées en barres de progression
+
+### Applications
+- **Projets PM2** — liste de tous les process PM2 avec statut, uptime, CPU, RAM, PID, port — actions Start / Stop / Restart en un clic
+- **Répertoire** — exploration du répertoire cible avec tailles, quota `/timeshift` (snapshots Timeshift)
+- **Mises à jour** — liste des paquets `apt` à mettre à jour, `apt-get update` et `apt-get upgrade` avec console en direct (Server-Sent Events)
+- **Éditeur** — édition de `server.js` directement depuis le navigateur avec CodeMirror (coloration syntaxique, Ctrl+S pour sauvegarder)
+
+### Sécurité
+- Authentification par cookie de session (token aléatoire 32 octets)
+- Session valable 7 jours, révocable via le bouton Déconnexion
+- Identifiants configurables via variables d'environnement
+
+---
+
+## Prérequis
+
+- [Node.js](https://nodejs.org/) v18 ou supérieur
+- [PM2](https://pm2.keymetrics.io/) (recommandé pour la gestion du process)
+- Debian/Ubuntu (pour les fonctionnalités `apt`)
+- `sudo` sans mot de passe pour `apt-get` (optionnel, pour les mises à jour)
+
+---
+
+## Installation
+
+```bash
+# Cloner le dépôt
+git clone https://github.com/votre-utilisateur/panelstats.git
+cd panelstats
+
+# Installer les dépendances
+npm install express
+
+# Lancer avec PM2
+pm2 start server.js --name dashboard
+pm2 save
 ```
-┌─────────────────────────────────────────────────────────┐
-│  🖥 PanelStats          ● LIVE   12:34:56   🌙 Sombre   │
-├──────────────┬──────────────────────────────────────────┤
-│  Overview    │  System Info  │ Network  │ CPU  │ RAM     │
-│  CPU         ├──────────────┼──────────┴──────┴─────────┤
-│  Memory      │   Gauges     │  CPU  RAM  Disk  Swap      │
-│  Disk        ├──────────────┴──────────────────────────  │
-│  ──────────  │   Chart CPU & RAM ────  System Load ───   │
-│  Projets PM2 ├─────────────────────────────────────────  │
-│  Répertoire  │   Disk Bars  │ Network I/O │ Top Procs    │
-│  Éditeur     │                                           │
-└──────────────┴───────────────────────────────────────────┘
+
+Accéder au panel : [http://localhost:3000](http://localhost:3000)
+
+---
+
+## Configuration
+
+Modifier les constantes en haut de `server.js` :
+
+```js
+const PORT       = 3000;           // Port d'écoute
+const TARGET_DIR = '/home/fredo';  // Répertoire à explorer
+```
+
+Les identifiants de connexion se définissent via variables d'environnement :
+
+```bash
+DASHBOARD_USER=admin \
+DASHBOARD_PASS=monmotdepasse \
+pm2 start server.js --name dashboard
+```
+
+Par défaut : `admin` / `1981`.
+
+### Sudo pour apt (optionnel)
+
+Pour utiliser les fonctions Mises à jour depuis le panel, autoriser `apt-get` sans mot de passe :
+
+```bash
+sudo visudo -f /etc/sudoers.d/panelstats
+```
+
+```
+fredo ALL=(ALL) NOPASSWD: /usr/bin/apt-get, /usr/bin/apt
 ```
 
 ---
 
-## 🚀 Installation
+## Structure
 
-### Prérequis
-
-- [Node.js](https://nodejs.org/) **v18+**
-- [PM2](https://pm2.keymetrics.io/) *(recommandé pour la persistance)*
-
-```bash
-node -v   # doit afficher v18.x ou supérieur
-npm -v
+```
+panelstats/
+└── server.js       # Serveur Express + interface HTML/CSS/JS (fichier unique)
 ```
 
-### 1. Cloner le dépôt
+L'intégralité du projet tient en un seul fichier — pas de build, pas de bundler, pas de dépendances front-end.
 
-```bash
-git clone https://github.com/votre-user/panelstats.git
-cd panelstats
-```
+---
 
-### 2. Installer les dépendances
+## Stack technique
 
-```bash
-npm install express
-```
+| Couche | Technologie |
+|---|---|
+| Serveur | Node.js + Express |
+| Process manager | PM2 |
+| UI | HTML/CSS/JS vanilla — glassmorphism |
+| Éditeur | CodeMirror 5 |
+| Icônes | Font Awesome 6 |
+| Polices | SF Pro Display (Google Fonts) |
+| Temps réel | `setInterval` + Server-Sent Events (SSE) |
 
-> **Note :** PanelStats n'utilise que `express`. Toutes les données système viennent des modules natifs Node.js (`os`, `child_process`, `fs`).
+---
 
-### 3. Configurer le répertoire cible
+## Captures d'écran
 
-Ouvrez `server.js` et modifiez la ligne **9** :
+| Overview | Mises à jour |
+|---|---|
+| ![Overview](screenshots/overview.png) | ![Updates](screenshots/updates.png) |
 
-```js
-// server.js — ligne 9
-const TARGET_DIR = '/home/votre-utilisateur';   // ← changez ici
-```
+---
 
-| Exemple d'utilisateur | Valeur à mettre            |
-|-----------------------|----------------------------|
-| `fredo`               | `/home/fredo`              |
+## Licence
+
+MIT — libre d'utilisation, de modification et de redistribution.| `fredo`               | `/home/fredo`              |
 | `alice`               | `/home/alice`              |
 | `pi` (Raspberry Pi)   | `/home/pi`                 |
 | `debian` (VPS)        | `/home/debian`             |
