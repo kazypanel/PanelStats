@@ -11,6 +11,413 @@ const SELF_PATH = __filename;
 
 app.use(express.json());
 
+// ── AUTHENTIFICATION SESSION UNIQUE AVEC COOKIE SÉCURISÉ ────────────────
+const crypto = require('crypto');
+
+const AUTH_USER = process.env.DASHBOARD_USER || 'admin';
+const AUTH_PASS = process.env.DASHBOARD_PASS || '1981'; // <--- MODIFIEZ CE MOT DE PASSE ICI
+
+const activeSessions = new Set();
+
+function parseCookies(cookieHeader) {
+  const list = {};
+  if (!cookieHeader) return list;
+  cookieHeader.split(';').forEach(cookie => {
+    const parts = cookie.split('=');
+    const name = parts.shift().trim();
+    if (name) {
+      list[name] = decodeURIComponent(parts.join('='));
+    }
+  });
+  return list;
+}
+
+function checkAuth(req, res, next) {
+  // Routes publiques
+  if (req.path === '/api/login') {
+    return next();
+  }
+
+  const cookies = parseCookies(req.headers.cookie);
+  const sessionToken = cookies.session;
+
+  if (sessionToken && activeSessions.has(sessionToken)) {
+    return next();
+  }
+
+  // Si requête API non authentifiée -> 401
+  if (req.path.startsWith('/api/')) {
+    return res.status(401).json({ error: 'Authentification requise.' });
+  }
+
+  // Si page principale non authentifiée -> Servir l'interface de connexion sleek
+  if (req.path === '/') {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8');
+    return res.send(getLoginHTML());
+  }
+
+  res.status(401).send('Authentification requise.');
+}
+
+// Appliquer la sécurité sur l'ensemble des requêtes
+app.use(checkAuth);
+
+// ── API CONNEXION / DÉCONNEXION ────────────────────────────────
+app.post('/api/login', (req, res) => {
+  const { username, password } = req.body;
+  if (username === AUTH_USER && password === AUTH_PASS) {
+    const token = crypto.randomBytes(32).toString('hex');
+    activeSessions.add(token);
+    res.setHeader('Set-Cookie', `session=${token}; HttpOnly; Path=/; SameSite=Strict; Max-Age=604800`); // 7 jours
+    return res.json({ success: true });
+  }
+  return res.status(401).json({ error: 'Identifiants incorrects' });
+});
+
+app.post('/api/logout', (req, res) => {
+  const cookies = parseCookies(req.headers.cookie);
+  const sessionToken = cookies.session;
+  if (sessionToken) {
+    activeSessions.delete(sessionToken);
+  }
+  res.setHeader('Set-Cookie', 'session=; HttpOnly; Path=/; SameSite=Strict; Max-Age=0');
+  res.json({ success: true });
+});
+
+// ── VUE CONNEXION SLEEK ─────────────────────────────────────────
+function getLoginHTML() {
+  return `<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connexion — PanelStats</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+
+:root {
+  --bg-1:       #dde4f0;
+  --bg-2:       #c8d3e8;
+  --glass:          rgba(255,255,255,0.55);
+  --glass-border:   rgba(255,255,255,0.75);
+  --glass-hover:    rgba(255,255,255,0.70);
+  --glass-shadow:   0 8px 32px rgba(100,120,180,0.18), 0 1px 2px rgba(100,120,180,0.10);
+  --blur:           saturate(180%) blur(20px);
+  --text:       #1a1f35;
+  --text-2:     #3a4060;
+  --muted:      #7a86a8;
+  --blue:       #0a84ff;
+  --indigo:     #5e5ce6;
+  --red:        #ff3b30;
+  --font:       'SF Pro Display', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --r:          16px;
+}
+
+[data-theme="dark"] {
+  --bg-1:       #0d1117;
+  --bg-2:       #161b2a;
+  --glass:          rgba(30,36,58,0.70);
+  --glass-border:   rgba(255,255,255,0.10);
+  --glass-hover:    rgba(255,255,255,0.08);
+  --glass-shadow:   0 8px 32px rgba(0,0,0,0.50), 0 1px 2px rgba(0,0,0,0.30);
+  --text:       #f0f2ff;
+  --text-2:     #a8b4d8;
+  --muted:      #5a6488;
+  --blue:       #0a84ff;
+  --indigo:     #7877c6;
+  --red:        #ff453a;
+}
+
+body {
+  font-family: var(--font);
+  font-size: 13px;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  background: var(--bg-1);
+  background-image:
+    radial-gradient(ellipse at 20% 50%, rgba(10,132,255,0.15) 0%, transparent 60%),
+    radial-gradient(ellipse at 80% 20%, rgba(191,90,242,0.12) 0%, transparent 50%),
+    radial-gradient(ellipse at 60% 85%, rgba(52,199,89,0.10) 0%, transparent 50%);
+  background-attachment: fixed;
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+}
+
+.login-card {
+  width: 360px;
+  background: var(--glass);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--r);
+  padding: 30px;
+  box-shadow: var(--glass-shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  z-index: 2;
+}
+
+.login-header {
+  text-align: center;
+}
+
+.login-logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, var(--blue), var(--indigo));
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 18px;
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(10,132,255,0.35);
+  margin: 0 auto 12px;
+}
+
+.login-title {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+}
+
+.login-subtitle {
+  font-size: 11px;
+  color: var(--muted);
+  margin-top: 4px;
+}
+
+.input-group {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.input-label {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-2);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.input-wrapper {
+  position: relative;
+}
+
+.input-wrapper i {
+  position: absolute;
+  left: 12px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.input-field {
+  width: 100%;
+  padding: 10px 12px 10px 36px;
+  border-radius: 9px;
+  border: 1px solid var(--glass-border);
+  background: rgba(255, 255, 255, 0.15);
+  color: var(--text);
+  font-family: var(--font);
+  font-size: 12.5px;
+  outline: none;
+  transition: all 0.2s;
+}
+
+.input-field:focus {
+  border-color: var(--blue);
+  background: rgba(255, 255, 255, 0.25);
+  box-shadow: 0 0 0 3px rgba(10, 132, 255, 0.15);
+}
+
+.btn-login {
+  background: linear-gradient(135deg, var(--blue), var(--indigo));
+  color: #fff;
+  border: none;
+  border-radius: 9px;
+  padding: 11px;
+  font-family: var(--font);
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  box-shadow: 0 4px 12px rgba(10,132,255,0.25);
+  margin-top: 5px;
+}
+
+.btn-login:hover {
+  opacity: 0.95;
+  transform: translateY(-1px);
+  box-shadow: 0 6px 16px rgba(10,132,255,0.35);
+}
+
+.btn-login:active {
+  transform: translateY(0);
+}
+
+.error-msg {
+  background: rgba(255, 59, 48, 0.1);
+  border: 1px solid rgba(255, 59, 48, 0.2);
+  color: var(--red);
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  display: none;
+  align-items: center;
+  gap: 8px;
+  animation: shake 0.3s;
+}
+
+@keyframes shake {
+  0%, 100% { transform: translateX(0); }
+  25% { transform: translateX(-4px); }
+  75% { transform: translateX(4px); }
+}
+
+.theme-btn {
+  position: absolute;
+  top: 20px;
+  right: 20px;
+  padding: 5px 12px;
+  border-radius: 20px;
+  border: 1px solid var(--glass-border);
+  background: var(--glass);
+  color: var(--text-2);
+  font-family: var(--font);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  backdrop-filter: blur(8px);
+  z-index: 10;
+}
+</style>
+</head>
+<body>
+
+<button class="theme-btn" id="theme-toggle" onclick="toggleTheme()">
+  <i class="fas fa-moon" id="theme-icon"></i>
+  <span id="theme-label">Sombre</span>
+</button>
+
+<div class="login-card">
+  <div class="login-header">
+    <div class="login-logo"><i class="fas fa-display"></i></div>
+    <h1 class="login-title">PanelStats</h1>
+    <p class="login-subtitle">Connectez-vous pour accéder au tableau de bord</p>
+  </div>
+
+  <div class="error-msg" id="error-msg">
+    <i class="fas fa-circle-exclamation"></i>
+    <span id="error-text">Identifiants incorrects</span>
+  </div>
+
+  <form onsubmit="handleLogin(event)" style="display:flex; flex-direction:column; gap:14px;">
+    <div class="input-group">
+      <label class="input-label" for="username">Utilisateur</label>
+      <div class="input-wrapper">
+        <i class="fas fa-user"></i>
+        <input class="input-field" type="text" id="username" required placeholder="admin" autocomplete="username">
+      </div>
+    </div>
+
+    <div class="input-group">
+      <label class="input-label" for="password">Mot de passe</label>
+      <div class="input-wrapper">
+        <i class="fas fa-lock"></i>
+        <input class="input-field" type="password" id="password" required placeholder="••••••••" autocomplete="current-password">
+      </div>
+    </div>
+
+    <button type="submit" class="btn-login" id="btn-login">
+      <span>Se connecter</span>
+      <i class="fas fa-arrow-right"></i>
+    </button>
+  </form>
+</div>
+
+<script>
+var currentTheme = localStorage.getItem('dashboard-theme') || 'light';
+
+function applyTheme(theme) {
+  currentTheme = theme;
+  var icon  = document.getElementById('theme-icon');
+  var label = document.getElementById('theme-label');
+  if (theme === 'dark') {
+    document.documentElement.setAttribute('data-theme','dark');
+    if (icon)  icon.className   = 'fas fa-sun';
+    if (label) label.textContent = 'Clair';
+  } else {
+    document.documentElement.removeAttribute('data-theme');
+    if (icon)  icon.className   = 'fas fa-moon';
+    if (label) label.textContent = 'Sombre';
+  }
+  localStorage.setItem('dashboard-theme', theme);
+}
+
+// Liaison immédiate
+function toggleTheme() { applyTheme(currentTheme === 'dark' ? 'light' : 'dark'); }
+applyTheme(currentTheme);
+
+async function handleLogin(e) {
+  e.preventDefault();
+  var u = document.getElementById('username').value;
+  var p = document.getElementById('password').value;
+  var errBox = document.getElementById('error-msg');
+  var errTxt = document.getElementById('error-text');
+  var btn = document.getElementById('btn-login');
+
+  errBox.style.display = 'none';
+  btn.disabled = true;
+  btn.innerHTML = '<span>Connexion...</span> <i class="fas fa-spinner spin"></i>';
+
+  try {
+    var response = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: u, password: p })
+    });
+    
+    if (response.ok) {
+      location.reload();
+    } else {
+      var data = await response.json();
+      errTxt.textContent = data.error || 'Erreur de connexion';
+      errBox.style.display = 'flex';
+      btn.disabled = false;
+      btn.innerHTML = '<span>Se connecter</span> <i class="fas fa-arrow-right"></i>';
+    }
+  } catch (err) {
+    errTxt.textContent = 'Serveur injoignable';
+    errBox.style.display = 'flex';
+    btn.disabled = false;
+    btn.innerHTML = '<span>Se connecter</span> <i class="fas fa-arrow-right"></i>';
+  }
+}
+</script>
+</body>
+</html>`;
+}
+
+
 // ─── UTILITAIRES ───────────────────────────────────────────────
 function formatSize(bytes) {
   if (!bytes || bytes === 0) return '0 o';
@@ -68,17 +475,14 @@ app.get('/api/files', async (req, res) => {
 app.get('/api/timeshift', async (req, res) => {
   const TIMESHIFT_DIR = '/timeshift';
   try {
-    // Disk usage of /timeshift via du
     let dirSize = 0;
     try {
       const du = await execPromise('du -sb ' + TIMESHIFT_DIR + ' 2>/dev/null | cut -f1');
       dirSize = parseInt(du) || 0;
     } catch (_) {
-      // fallback: recursive scan
       dirSize = await getDirectorySize(TIMESHIFT_DIR);
     }
 
-    // Filesystem quota of the partition that contains /timeshift
     let fsTotal = 0, fsUsed = 0, fsFree = 0, fsPercent = 0, fsMount = '', fsDevice = '';
     try {
       const df = await execPromise("df -B1 " + TIMESHIFT_DIR + " | awk 'NR==2{print $1, $2, $3, $4, $5, $6}'");
@@ -91,7 +495,6 @@ app.get('/api/timeshift', async (req, res) => {
       fsMount   = p[5] || '';
     } catch (_) {}
 
-    // Snapshot count
     let snapshotCount = 0;
     try {
       const ls = await execPromise('ls ' + TIMESHIFT_DIR + '/snapshots 2>/dev/null | wc -l');
@@ -267,6 +670,7 @@ app.post('/api/restart', (req, res) => {
 
 // ─── HTML ──────────────────────────────────────────────────────
 app.get('/', (req, res) => {
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.send(`<!DOCTYPE html>
 <html lang="fr">
 <head>
@@ -277,6 +681,14 @@ app.get('/', (req, res) => {
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=SF+Pro+Display:wght@300;400;500;600;700&family=SF+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css">
+
+<!-- ══ SCRIPT & CSS CODEMIRROR POUR L'EDITEUR DE CODE ══ -->
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/theme/dracula.min.css">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/theme/eclipse.min.css">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/codemirror.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/codemirror/5.65.13/mode/javascript/javascript.min.js"></script>
+
 <style>
 *,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
 
@@ -679,6 +1091,31 @@ tbody td{padding:8px 11px;font-size:11.5px}
 }
 .theme-btn:hover{background:var(--glass-hover);border-color:rgba(10,132,255,.40)}
 
+/* ── UPDATES ── */
+.upd-console{
+  font-family:var(--mono);font-size:11px;line-height:1.6;
+  background:rgba(0,0,0,.55);color:#e2e8f0;
+  border-radius:var(--r-sm);padding:12px 14px;
+  height:260px;overflow-y:auto;white-space:pre-wrap;word-break:break-all;
+}
+.upd-console .l-err{color:#fc8181}
+.upd-console .l-done{color:#68d391;font-weight:700}
+.upd-kpi-strip{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:0}
+.upd-kpi{
+  flex:1;min-width:120px;
+  background:var(--glass-panel);border:1px solid var(--glass-border);
+  border-radius:var(--r);padding:12px 16px;text-align:center;
+  box-shadow:var(--glass-shadow-sm);
+}
+.upd-kpi-num{font-size:28px;font-weight:700;letter-spacing:-.04em;line-height:1}
+.upd-kpi-lbl{font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;margin-top:4px}
+.upd-badge{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:2px 9px;border-radius:20px;font-size:10px;font-weight:700;
+  background:rgba(255,159,10,.15);color:var(--orange);border:1px solid rgba(255,159,10,.30);
+}
+.upd-btn-row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+
 /* ── FILES ── */
 .files-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
 .fsec-title{
@@ -706,7 +1143,10 @@ tbody td{padding:8px 11px;font-size:11.5px}
 .fsz{font-size:10px;color:var(--muted);white-space:nowrap;margin-left:4px;font-weight:600}
 
 /* ── EDITOR ── */
-.editor-wrap{display:flex;flex-direction:column;gap:12px;flex:1;min-height:0}
+#tab-editor {
+  overflow: hidden !important; /* On empêche le scroll du panel entier pour garder l'éditeur fixe */
+}
+.editor-wrap{display:flex;flex-direction:column;gap:12px;flex:1;min-height:0;height:100%}
 .editor-toolbar{
   background:var(--glass-panel);
   backdrop-filter:var(--blur-sm);
@@ -716,12 +1156,16 @@ tbody td{padding:8px 11px;font-size:11.5px}
 }
 .editor-file{font-size:12px;font-weight:600;color:var(--blue);display:flex;align-items:center;gap:8px}
 .editor-acts{display:flex;gap:8px}
-#code-area{
-  flex:1;min-height:400px;padding:16px;border-radius:var(--r);
-  background:rgba(0,0,0,.75);color:#e8eaf6;
-  font-family:var(--mono);font-size:12px;
-  line-height:1.7;border:1px solid rgba(255,255,255,.08);resize:vertical;outline:none;
-  box-shadow:inset 0 2px 8px rgba(0,0,0,.3);
+
+/* Personnalisation de l'affichage de CodeMirror */
+.CodeMirror {
+  flex: 1;
+  height: auto;
+  border-radius: var(--r);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  border: 1px solid var(--glass-border);
+  box-shadow: inset 0 2px 8px rgba(0,0,0,.15);
 }
 
 /* ── TOAST ── */
@@ -803,6 +1247,10 @@ tbody td{padding:8px 11px;font-size:11.5px}
 <div class="nav-item" onclick="switchTab('files',this)">
   <i class="fas fa-folder-open"></i> Répertoire
 </div>
+<div class="nav-item" onclick="switchTab('updates',this)">
+  <i class="fas fa-arrow-up-from-bracket"></i> Mises à jour
+  <span id="nav-upd-badge" style="display:none;margin-left:auto;background:rgba(255,159,10,.2);color:var(--orange);font-size:9px;font-weight:700;padding:1px 6px;border-radius:10px"></span>
+</div>
 <div class="nav-item" onclick="switchTab('editor',this)">
   <i class="fas fa-code"></i> Éditeur
 </div>
@@ -825,6 +1273,10 @@ tbody td{padding:8px 11px;font-size:11.5px}
     <button class="theme-btn" id="theme-toggle" onclick="toggleTheme()" title="Changer de thème">
       <i class="fas fa-moon" id="theme-icon"></i>
       <span id="theme-label">Sombre</span>
+    </button>
+    <button class="theme-btn" onclick="logout()" title="Se déconnecter" style="border-color: rgba(255, 59, 48, 0.25); color: var(--red); background: rgba(255, 59, 48, 0.05);">
+      <i class="fas fa-sign-out-alt"></i>
+      <span>Déconnexion</span>
     </button>
   </div>
 </div>
@@ -1064,6 +1516,71 @@ tbody td{padding:8px 11px;font-size:11.5px}
 </div>
 </div>
 
+<!-- ══ MISES À JOUR ══ -->
+<div class="tab-panel" id="tab-updates">
+
+<!-- KPIs -->
+<div class="upd-kpi-strip">
+  <div class="upd-kpi">
+    <div class="upd-kpi-num" id="upd-count" style="color:var(--orange)">—</div>
+    <div class="upd-kpi-lbl">Paquets à mettre à jour</div>
+  </div>
+  <div class="upd-kpi" style="flex:3;text-align:left;display:flex;align-items:center;gap:12px">
+    <div class="upd-btn-row">
+      <button class="btn" id="btn-upd-refresh" onclick="loadUpdates()">
+        <i class="fas fa-sync"></i> Vérifier
+      </button>
+      <button class="btn" id="btn-apt-fetch" onclick="runApt('fetch')">
+        <i class="fas fa-download"></i> apt-get update
+      </button>
+      <button class="btn btn-primary" id="btn-apt-upgrade" onclick="runApt('upgrade')">
+        <i class="fas fa-arrow-up"></i> apt-get upgrade
+      </button>
+    </div>
+    <span id="upd-ts" style="font-size:10px;color:var(--muted);margin-left:auto"></span>
+  </div>
+</div>
+
+<!-- Liste des paquets -->
+<div class="panel">
+  <div class="panel-hd">
+    <span><i class="fas fa-boxes-stacked"></i> Paquets disponibles</span>
+    <span id="upd-list-count" style="font-size:10px;color:var(--muted)"></span>
+  </div>
+  <div style="overflow-x:auto;max-height:260px;overflow-y:auto">
+    <table>
+      <thead><tr>
+        <th>Paquet</th>
+        <th>Version actuelle</th>
+        <th>Nouvelle version</th>
+      </tr></thead>
+      <tbody id="upd-tbody">
+        <tr><td colspan="3" style="text-align:center;padding:22px;color:var(--muted)">
+          <i class="fas fa-spinner spin"></i> Chargement...
+        </td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<!-- Console live -->
+<div class="panel">
+  <div class="panel-hd">
+    <span><i class="fas fa-terminal"></i> Console en direct</span>
+    <div style="display:flex;gap:6px;align-items:center">
+      <span id="upd-console-status" style="font-size:10px;color:var(--muted)">En attente</span>
+      <button class="btn" style="padding:3px 9px;font-size:10px" onclick="clearConsole()">
+        <i class="fas fa-trash"></i> Vider
+      </button>
+    </div>
+  </div>
+  <div class="panel-bd" style="padding:0">
+    <div class="upd-console" id="upd-console">Aucune commande lancée.</div>
+  </div>
+</div>
+
+</div>
+
 <!-- ══ ÉDITEUR ══ -->
 <div class="tab-panel" id="tab-editor">
 <div class="editor-wrap">
@@ -1079,6 +1596,7 @@ tbody td{padding:8px 11px;font-size:11.5px}
       <button class="btn btn-danger" onclick="editorRestart()"><i class="fas fa-rotate-right"></i> Redémarrer PM2</button>
     </div>
   </div>
+  <!-- Zone de texte qui sera remplacée par CodeMirror en JS -->
   <textarea id="code-area" spellcheck="false" placeholder="Chargement..."></textarea>
 </div>
 </div>
@@ -1106,6 +1624,12 @@ function applyTheme(theme) {
     if (label) label.textContent = 'Sombre';
   }
   localStorage.setItem('dashboard-theme', theme);
+  
+  // Changement dynamique du thème de l'éditeur s'il est initialisé
+  if (editor) {
+    editor.setOption('theme', theme === 'dark' ? 'dracula' : 'eclipse');
+  }
+  
   setTimeout(function() { drawChartDual('chartMain', histCpu, histMem); }, 50);
 }
 
@@ -1135,7 +1659,7 @@ function fmtBG(b) {
 }
 
 // ── TABS ──────────────────────────────────────────────────────
-var tabs = {overview:1,cpu:0,memory:0,disk:0,pm2:0,files:0,editor:0};
+var tabs = {overview:1,cpu:0,memory:0,disk:0,pm2:0,files:0,updates:0,editor:0};
 var editorLoaded=false, filesLoaded=false, pm2Loaded=false;
 var titles = {
   overview:'Overview — PanelStats',
@@ -1144,6 +1668,7 @@ var titles = {
   disk:'Disk Usage — PanelStats',
   pm2:'Projets PM2 — PanelStats',
   files:'Répertoire — PanelStats',
+  updates:'Mises à jour — PanelStats',
   editor:'Éditeur server.js — PanelStats'
 };
 
@@ -1153,9 +1678,10 @@ function switchTab(key, el) {
   if (el) el.classList.add('active');
   document.getElementById('tab-'+key).classList.add('active');
   document.getElementById('topbar-title').textContent = titles[key] || 'PanelStats';
-  if (key==='pm2'    && !pm2Loaded)    { pm2Loaded=true;    loadPm2(); }
-  if (key==='files'  && !filesLoaded)  { filesLoaded=true;  loadFiles(); loadTimeshift(); }
-  if (key==='editor' && !editorLoaded) editorLoad();
+  if (key==='pm2'     && !pm2Loaded)    { pm2Loaded=true;    loadPm2(); }
+  if (key==='files'   && !filesLoaded)  { filesLoaded=true;  loadFiles(); loadTimeshift(); }
+  if (key==='updates' && !updLoaded)    { updLoaded=true;    loadUpdates(); }
+  if (key==='editor'  && !editorLoaded) { initCodeMirror(); editorLoad(); }
   if (key==='cpu')    drawChartSingle('chartCpu2',  histCpu, 'var(--bar-cpu)');
   if (key==='memory') drawChartSingle('chartMem2',  histMem, 'var(--bar-mem)');
 }
@@ -1188,6 +1714,16 @@ function pbarRow(lbl, val, pct, color) {
     '<div class="pbar-top"><span class="pbar-lbl">'+lbl+'</span><span class="pbar-val">'+val+'</span></div>'+
     '<div class="pbar"><div class="pbar-fill" style="width:'+pct+'%;background:'+color+'"></div></div>'+
     '</div>';
+}
+
+// ── API FETCH (cookie session automatique) ────────────────────
+function apiFetch(url, opts) {
+  opts = opts || {};
+  opts.credentials = 'same-origin';
+  return fetch(url, opts).then(function(r) {
+    if (r.status === 401) { location.reload(); throw new Error('Session expirée'); }
+    return r;
+  });
 }
 
 // ── RENDER STATS ──────────────────────────────────────────────
@@ -1316,7 +1852,7 @@ function renderStats(s) {
 
 async function loadStats() {
   try {
-    var s = await fetch('/api/stats').then(function(r) { return r.json(); });
+    var s = await apiFetch('/api/stats').then(function(r) { return r.json(); });
     renderStats(s);
   } catch(e) {}
 }
@@ -1412,7 +1948,7 @@ function drawChartSingle(id, data, clr) {
 
 async function loadHistory() {
   try {
-    var h = await fetch('/api/history').then(function(r) { return r.json(); });
+    var h = await apiFetch('/api/history').then(function(r) { return r.json(); });
     histCpu = h.cpu; histMem = h.mem;
     document.getElementById('chart-ts').textContent = new Date().toLocaleTimeString('fr-FR');
     drawChartDual('chartMain', histCpu, histMem);
@@ -1424,7 +1960,7 @@ async function loadPm2() {
   document.getElementById('pm2-tbody').innerHTML =
     '<tr><td colspan="10" style="text-align:center;padding:22px;color:var(--muted)"><i class="fas fa-spinner spin"></i> Chargement...</td></tr>';
   try {
-    var d = await fetch('/api/pm2').then(function(r) { return r.json(); });
+    var d = await apiFetch('/api/pm2').then(function(r) { return r.json(); });
     document.getElementById('pm2-total').textContent   = d.total;
     document.getElementById('pm2-online').textContent  = d.online;
     document.getElementById('pm2-offline').textContent = d.total - d.online;
@@ -1466,14 +2002,11 @@ async function loadPm2() {
   }
 }
 
-// Listener unique sur le tab PM2 (délégation, jamais réécrit)
-
 async function pm2Action(action, id) {
-  // Désactiver tous les boutons de la ligne pour éviter les doubles clics
   document.querySelectorAll('.pm2-btn[data-id="'+id+'"]').forEach(function(b) { b.disabled = true; });
   toast('PM2 ' + action + ' #' + id + '...', 'info');
   try {
-    var resp = await fetch('/api/pm2/' + action + '/' + id, { method: 'POST' });
+    var resp = await apiFetch('/api/pm2/' + action + '/' + id, { method: 'POST' });
     if (!resp.ok) throw new Error('HTTP ' + resp.status);
     var r = await resp.json();
     toast(r.message || 'OK', 'success');
@@ -1487,7 +2020,7 @@ async function pm2Action(action, id) {
 // ── FICHIERS ──────────────────────────────────────────────────
 async function loadFiles() {
   try {
-    var d = await fetch('/api/files').then(function(r) { return r.json(); });
+    var d = await apiFetch('/api/files').then(function(r) { return r.json(); });
     var secs = [
       {key:'dossiers', title:'Dossiers'},
       {key:'fichiers', title:'Fichiers'},
@@ -1517,7 +2050,7 @@ async function loadTimeshift() {
   if (!el) return;
   el.innerHTML = '<div style="color:var(--muted);padding:10px;text-align:center"><i class="fas fa-spinner spin"></i> Chargement...</div>';
   try {
-    var d = await fetch('/api/timeshift').then(function(r) { return r.json(); });
+    var d = await apiFetch('/api/timeshift').then(function(r) { return r.json(); });
     if (d.error) { el.innerHTML = '<p style="color:var(--red);padding:10px">' + d.error + '</p>'; return; }
 
     var fs = d.filesystem;
@@ -1558,29 +2091,162 @@ async function loadTimeshift() {
   }
 }
 
-// ── EDITEUR ───────────────────────────────────────────────────
+// ── EDITEUR PROFESSIONALISE (CodeMirror) ──────────────────────
+var editor; // Contiendra l'instance de CodeMirror
+
+function initCodeMirror() {
+  if (editor) return; // Déjà initialisé
+  var codeArea = document.getElementById('code-area');
+  if (!codeArea) return;
+
+  editor = CodeMirror.fromTextArea(codeArea, {
+    lineNumbers: true,
+    mode: "javascript",
+    theme: currentTheme === 'dark' ? 'dracula' : 'eclipse',
+    tabSize: 2,
+    indentWithTabs: false,
+    lineWrapping: true
+  });
+
+  // Liaison des raccourcis de sauvegarde Ctrl+S / Cmd+S
+  editor.setOption("extraKeys", {
+    "Ctrl-S": function(cm) { editorSave(); },
+    "Cmd-S": function(cm) { editorSave(); }
+  });
+}
+
 async function editorLoad() {
   try {
-    var d = await fetch('/api/editor').then(function(r) { return r.json(); });
-    document.getElementById('code-area').value = d.content;
+    var d = await apiFetch('/api/editor').then(function(r) { return r.json(); });
+    
+    initCodeMirror(); // Assurer l'init
+    if (editor) {
+      editor.setValue(d.content);
+    } else {
+      document.getElementById('code-area').value = d.content;
+    }
+    
     editorLoaded = true;
     toast('Fichier chargé', 'success');
   } catch(e) { toast('Erreur chargement', 'error'); }
 }
 
 async function editorSave() {
-  var content = document.getElementById('code-area').value;
+  var content = editor ? editor.getValue() : document.getElementById('code-area').value;
   try {
-    await fetch('/api/editor', {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({content:content})});
+    await apiFetch('/api/editor', {
+      method:'POST', 
+      headers:{'Content-Type':'application/json'}, 
+      body:JSON.stringify({content:content})
+    });
     toast('Fichier sauvegardé !', 'success');
   } catch(e) { toast('Erreur sauvegarde', 'error'); }
 }
 
 function editorRestart() {
   if (!confirm('PM2 va redémarrer. Continuer ?')) return;
-  fetch('/api/restart', {method:'POST'})
+  apiFetch('/api/restart', {method:'POST'})
     .then(function() { toast('Redémarrage envoyé — rechargez dans 4s','info'); setTimeout(function() { location.reload(); }, 4000); })
     .catch(function() { toast('Erreur','error'); });
+}
+
+// ── MISES À JOUR ──────────────────────────────────────────────
+var updLoaded = false;
+
+async function loadUpdates() {
+  var btn = document.getElementById('btn-upd-refresh');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner spin"></i> Vérification...'; }
+  document.getElementById('upd-tbody').innerHTML =
+    '<tr><td colspan="3" style="text-align:center;padding:22px;color:var(--muted)"><i class="fas fa-spinner spin"></i> Chargement...</td></tr>';
+  try {
+    var d = await apiFetch('/api/updates').then(function(r) { return r.json(); });
+    var cnt = d.count || 0;
+
+    document.getElementById('upd-count').textContent = cnt;
+    document.getElementById('upd-ts').textContent = 'Vérifié à ' + new Date().toLocaleTimeString('fr-FR');
+    document.getElementById('upd-list-count').textContent = cnt + ' paquet' + (cnt > 1 ? 's' : '');
+
+    // Badge sidebar
+    var badge = document.getElementById('nav-upd-badge');
+    if (cnt > 0) { badge.style.display = ''; badge.textContent = cnt; }
+    else         { badge.style.display = 'none'; }
+
+    if (cnt === 0) {
+      document.getElementById('upd-tbody').innerHTML =
+        '<tr><td colspan="3" style="text-align:center;padding:22px;color:var(--green)">' +
+        '<i class="fas fa-circle-check"></i> Système à jour !</td></tr>';
+    } else {
+      document.getElementById('upd-tbody').innerHTML = (d.packages || []).map(function(p) {
+        return '<tr>' +
+          '<td><strong>' + p.name + '</strong></td>' +
+          '<td style="color:var(--muted);font-family:var(--mono);font-size:10.5px">' + p.oldVersion + '</td>' +
+          '<td><span class="upd-badge"><i class="fas fa-arrow-up" style="font-size:9px"></i>' + p.newVersion + '</span></td>' +
+          '</tr>';
+      }).join('');
+    }
+  } catch(e) {
+    document.getElementById('upd-tbody').innerHTML =
+      '<tr><td colspan="3" style="color:var(--red);padding:14px">Erreur : ' + e.message + '</td></tr>';
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-sync"></i> Vérifier'; }
+  }
+}
+
+function clearConsole() {
+  document.getElementById('upd-console').innerHTML = '';
+  document.getElementById('upd-console-status').textContent = 'En attente';
+  document.getElementById('upd-console-status').style.color = 'var(--muted)';
+}
+
+function appendConsole(line, cls) {
+  var el = document.getElementById('upd-console');
+  var span = document.createElement('span');
+  span.className = cls || '';
+  span.textContent = line + '\\n';
+  el.appendChild(span);
+  el.scrollTop = el.scrollHeight;
+}
+
+function setConsoleBtns(running) {
+  ['btn-apt-fetch', 'btn-apt-upgrade', 'btn-upd-refresh'].forEach(function(id) {
+    var b = document.getElementById(id);
+    if (b) b.disabled = running;
+  });
+}
+
+function runApt(action) {
+  clearConsole();
+  var label = action === 'fetch' ? 'apt-get update' : 'apt-get upgrade';
+  var st = document.getElementById('upd-console-status');
+  st.textContent = '● ' + label + ' en cours...';
+  st.style.color = 'var(--orange)';
+  setConsoleBtns(true);
+
+  var es = new EventSource('/api/updates/' + action);
+  es.onmessage = function(e) {
+    try {
+      var msg = JSON.parse(e.data);
+      if (msg.t === 'out')  appendConsole(msg.line, '');
+      if (msg.t === 'err')  appendConsole(msg.line, 'l-err');
+      if (msg.t === 'done') {
+        var ok = msg.code === 0;
+        appendConsole((ok ? '✔ Terminé (code 0)' : '✖ Erreur (code ' + msg.code + ')'), 'l-done');
+        st.textContent = ok ? '✔ Terminé' : '✖ Erreur code ' + msg.code;
+        st.style.color = ok ? 'var(--green)' : 'var(--red)';
+        setConsoleBtns(false);
+        es.close();
+        if (ok && action === 'fetch') loadUpdates(); // rafraîchit la liste après update
+        if (ok && action === 'upgrade') setTimeout(loadUpdates, 1500);
+      }
+    } catch(_) {}
+  };
+  es.onerror = function() {
+    appendConsole('Connexion perdue.', 'l-err');
+    st.textContent = 'Erreur connexion';
+    st.style.color = 'var(--red)';
+    setConsoleBtns(false);
+    es.close();
+  };
 }
 
 // ── INIT ──────────────────────────────────────────────────────
@@ -1591,13 +2257,22 @@ window.addEventListener('load', function() {
   setInterval(loadStats,   5000);
   setInterval(loadHistory, 2000);
 
-  // Délégation PM2 : listener unique sur le tab entier (la table est reconstruite à chaque loadPm2)
   document.getElementById('tab-pm2').addEventListener('click', function(e) {
     var btn = e.target.closest('.pm2-btn');
     if (!btn || btn.disabled) return;
     pm2Action(btn.dataset.action, btn.dataset.id);
   });
 });
+
+async function logout() {
+  try {
+    await fetch('/api/logout', { method: 'POST' });
+    toast('Déconnexion...', 'info');
+    setTimeout(function() { location.reload(); }, 800);
+  } catch (e) {
+    toast('Erreur lors de la déconnexion', 'error');
+  }
+}
 
 window.addEventListener('resize', function() {
   initCanvas('chartMain', 110);
@@ -1606,6 +2281,62 @@ window.addEventListener('resize', function() {
 </script>
 </body>
 </html>`);
+});
+
+// ─── API MISES À JOUR ─────────────────────────────────────────
+// GET  /api/updates        → liste des paquets à mettre à jour
+// POST /api/updates/fetch  → lance apt-get update (SSE)
+// POST /api/updates/upgrade→ lance apt-get upgrade -y (SSE)
+
+function sseRun(req, res, cmd) {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.flushHeaders();
+
+  const child = require('child_process').spawn('bash', ['-c', cmd], {
+    env: Object.assign({}, process.env, { DEBIAN_FRONTEND: 'noninteractive' })
+  });
+
+  child.stdout.on('data', d => {
+    d.toString().split('\n').forEach(line => {
+      if (line) res.write('data: ' + JSON.stringify({ t: 'out', line }) + '\n\n');
+    });
+  });
+  child.stderr.on('data', d => {
+    d.toString().split('\n').forEach(line => {
+      if (line) res.write('data: ' + JSON.stringify({ t: 'err', line }) + '\n\n');
+    });
+  });
+  child.on('close', code => {
+    res.write('data: ' + JSON.stringify({ t: 'done', code }) + '\n\n');
+    res.end();
+  });
+  req.on('close', () => child.kill());
+}
+
+app.get('/api/updates', (req, res) => {
+  exec('LANG=C sudo -n apt list --upgradable 2>/dev/null | grep -v "^Listing"', (err, stdout) => {
+    const lines = (stdout || '').trim().split('\n').filter(Boolean);
+    const packages = lines.map(line => {
+      // format: name/repo version arch [upgradable from: old]
+      const m = line.match(/^([^/]+)\/(\S+)\s+(\S+)\s+(\S+)\s+\[upgradable from: ([^\]]+)\]/);
+      if (m) return { name: m[1], repo: m[2], newVersion: m[3], arch: m[4], oldVersion: m[5] };
+      // fallback: try to extract name and version without the upgradable part
+      const m2 = line.match(/^([^/]+)\/(\S+)\s+(\S+)/);
+      if (m2) return { name: m2[1], newVersion: m2[3], oldVersion: '?' };
+      return { name: line.split('/')[0], newVersion: '—', oldVersion: '—' };
+    }).filter(p => p.name);
+    res.json({ count: packages.length, packages, error: err ? err.message : null });
+  });
+});
+
+app.get('/api/updates/fetch', (req, res) => {
+  sseRun(req, res, 'sudo -n /usr/bin/apt-get -o Dpkg::Options::="--force-confdef" update 2>&1');
+});
+
+app.get('/api/updates/upgrade', (req, res) => {
+  sseRun(req, res, 'sudo -n /usr/bin/apt-get -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade -y 2>&1');
 });
 
 app.listen(PORT, function() { console.log('PanelStats Dashboard actif sur le port ' + PORT); });
