@@ -11,10 +11,11 @@ const app = express();
 const CONFIG_PATH = path.join(__dirname, 'panelstats.config.json');
 
 let runtimeConfig = {
-  user:      process.env.DASHBOARD_USER || 'admin',
-  pass:      process.env.DASHBOARD_PASS || '1981',
-  targetDir: '/home/fredo',
-  port:      3000
+  user:         process.env.DASHBOARD_USER || 'admin',
+  pass:         process.env.DASHBOARD_PASS || '1981',
+  targetDir:    '/home/fredo',
+  timeshiftDir: '/mnt/usb-Generic_MassStorageClass_000000002402-0:0-part1/timeshift',
+  port:         3000
 };
 
 async function loadConfig() {
@@ -82,25 +83,27 @@ app.post('/api/logout', (req, res) => {
 // ─── API CONFIGURATION ────────────────────────────────────────
 app.get('/api/config', (req, res) => {
   res.json({
-    user:      runtimeConfig.user,
-    targetDir: runtimeConfig.targetDir,
-    port:      runtimeConfig.port
+    user:         runtimeConfig.user,
+    targetDir:    runtimeConfig.targetDir,
+    timeshiftDir: runtimeConfig.timeshiftDir,
+    port:         runtimeConfig.port
     // le mot de passe n'est jamais renvoyé
   });
 });
 
 app.post('/api/config', async (req, res) => {
-  const { user, pass, newPass, targetDir, port } = req.body;
+  const { user, pass, newPass, targetDir, timeshiftDir, port } = req.body;
 
   // Vérification ancien mot de passe obligatoire
   if (!pass || pass !== runtimeConfig.pass) {
     return res.status(403).json({ error: 'Mot de passe actuel incorrect.' });
   }
 
-  if (user)      runtimeConfig.user      = user.trim();
-  if (newPass)   runtimeConfig.pass      = newPass;
-  if (targetDir) runtimeConfig.targetDir = targetDir.trim();
-  if (port)      runtimeConfig.port      = parseInt(port);
+  if (user)         runtimeConfig.user         = user.trim();
+  if (newPass)      runtimeConfig.pass         = newPass;
+  if (targetDir)    runtimeConfig.targetDir    = targetDir.trim();
+  if (timeshiftDir) runtimeConfig.timeshiftDir = timeshiftDir.trim();
+  if (port)         runtimeConfig.port         = parseInt(port);
 
   try {
     await saveConfig();
@@ -166,7 +169,7 @@ app.get('/api/files', async (req, res) => {
 
 // ─── API TIMESHIFT ─────────────────────────────────────────────
 app.get('/api/timeshift', async (req, res) => {
-  const TIMESHIFT_DIR = '/mnt/usb-Generic_MassStorageClass_000000002402-0:0-part1/timeshift';
+  const TIMESHIFT_DIR = runtimeConfig.timeshiftDir;
   try {
     let dirSize = 0;
     try {
@@ -1065,12 +1068,18 @@ tbody td{padding:9px 12px;font-size:12px}
         <div class="cfg-alert" id="cfg-alert-srv"><i class="fas fa-circle-check"></i><span id="cfg-alert-srv-txt"></span></div>
         <div class="cfg-current">
           <div class="cfg-current-row"><span class="cfg-current-lbl">Répertoire surveillé</span><span class="cfg-current-val" id="cfg-cur-dir">—</span></div>
+          <div class="cfg-current-row"><span class="cfg-current-lbl">Dossier Timeshift</span><span class="cfg-current-val" id="cfg-cur-timeshift">—</span></div>
           <div class="cfg-current-row"><span class="cfg-current-lbl">Port HTTP</span><span class="cfg-current-val" id="cfg-cur-port">—</span></div>
         </div>
         <div class="cfg-field">
           <div class="cfg-label"><i class="fas fa-folder-open" style="opacity:.5"></i>Répertoire à surveiller</div>
           <input type="text" class="cfg-input" id="cfg-dir" placeholder="/home/fredo" autocomplete="off">
-          <div class="cfg-hint"><i class="fas fa-info-circle"></i>Chemin absolu sur le serveur</div>
+          <div class="cfg-hint"><i class="fas fa-info-circle"></i>Chemin absolu affiché dans l'onglet Répertoire</div>
+        </div>
+        <div class="cfg-field">
+          <div class="cfg-label"><i class="fas fa-clock-rotate-left" style="opacity:.5"></i>Dossier Timeshift</div>
+          <input type="text" class="cfg-input" id="cfg-timeshift" placeholder="/mnt/usb-.../timeshift" autocomplete="off">
+          <div class="cfg-hint"><i class="fas fa-info-circle"></i>Chemin absolu du dossier Timeshift à surveiller</div>
         </div>
         <div class="cfg-field">
           <div class="cfg-label"><i class="fas fa-plug" style="opacity:.5"></i>Port HTTP</div>
@@ -1540,12 +1549,14 @@ function runApt(action){
 async function loadConfigPanel() {
   try {
     var d=await apiFetch('/api/config').then(function(r){return r.json();});
-    document.getElementById('cfg-cur-user').textContent = d.user;
-    document.getElementById('cfg-cur-dir').textContent  = d.targetDir;
-    document.getElementById('cfg-cur-port').textContent = d.port;
-    document.getElementById('cfg-dir').placeholder  = d.targetDir;
-    document.getElementById('cfg-port').placeholder = d.port;
-    document.getElementById('cfg-user').placeholder = d.user;
+    document.getElementById('cfg-cur-user').textContent      = d.user;
+    document.getElementById('cfg-cur-dir').textContent       = d.targetDir;
+    document.getElementById('cfg-cur-timeshift').textContent = d.timeshiftDir;
+    document.getElementById('cfg-cur-port').textContent      = d.port;
+    document.getElementById('cfg-dir').placeholder       = d.targetDir;
+    document.getElementById('cfg-timeshift').placeholder = d.timeshiftDir;
+    document.getElementById('cfg-port').placeholder      = d.port;
+    document.getElementById('cfg-user').placeholder      = d.user;
   } catch(e){toast('Erreur chargement config','error');}
 }
 
@@ -1579,18 +1590,27 @@ async function saveCreds() {
 }
 
 async function saveSrv() {
-  var dir     = document.getElementById('cfg-dir').value.trim();
-  var port    = document.getElementById('cfg-port').value;
-  var curPass = document.getElementById('cfg-curpass2').value;
+  var dir          = document.getElementById('cfg-dir').value.trim();
+  var timeshiftDir = document.getElementById('cfg-timeshift').value.trim();
+  var port         = document.getElementById('cfg-port').value;
+  var curPass      = document.getElementById('cfg-curpass2').value;
   if (!curPass) { showCfgAlert('cfg-alert-srv','error','Mot de passe actuel requis.'); return; }
   if (port && (parseInt(port)<1||parseInt(port)>65535)) { showCfgAlert('cfg-alert-srv','error','Port invalide (1-65535).'); return; }
   try {
-    var r=await apiFetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({targetDir:dir||undefined,port:port||undefined,pass:curPass})});
+    var r=await apiFetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+      targetDir:    dir||undefined,
+      timeshiftDir: timeshiftDir||undefined,
+      port:         port||undefined,
+      pass:         curPass
+    })});
     var d=await r.json();
     if(!r.ok){showCfgAlert('cfg-alert-srv','error',d.error||'Erreur');return;}
     showCfgAlert('cfg-alert-srv','success',d.message||'Sauvegardé !');
     toast('Paramètres serveur mis à jour','success');
     document.getElementById('cfg-curpass2').value='';
+    document.getElementById('cfg-dir').value='';
+    document.getElementById('cfg-timeshift').value='';
+    document.getElementById('cfg-port').value='';
     filesLoaded=false;
     configLoaded=false; loadConfigPanel();
   } catch(e){showCfgAlert('cfg-alert-srv','error','Erreur réseau');}
