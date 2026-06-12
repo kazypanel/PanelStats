@@ -202,19 +202,48 @@ app.get('/api/pm2', async (req, res) => {
   try {
     const raw = await execPromise('pm2 jlist');
     const list = JSON.parse(raw);
-    const projects = list.map(p => ({
-      id: p.pm_id, name: p.name,
-      status: p.pm2_env ? p.pm2_env.status : 'unknown',
-      uptimeFormatted: (p.pm2_env && p.pm2_env.pm_uptime)
-        ? formatUptime(Math.floor((Date.now() - p.pm2_env.pm_uptime) / 1000)) : '—',
-      cpu: p.monit ? p.monit.cpu : 0,
-      mem: p.monit ? p.monit.memory : 0,
-      memFormatted: formatSize(p.monit ? p.monit.memory : 0),
-      restarts: p.pm2_env ? p.pm2_env.restart_time : 0,
-      pid: p.pid || '—',
-      script: (p.pm2_env && p.pm2_env.pm_exec_path) ? p.pm2_env.pm_exec_path : '—',
-      port: (p.pm2_env && p.pm2_env.env && p.pm2_env.env.PORT) ? p.pm2_env.env.PORT : '—',
-    }));
+
+    // Construire une map PID -> port via ss (ports TCP en écoute)
+    const pidPortMap = {};
+    try {
+      const ss = await execPromise("ss -tlnp 2>/dev/null | awk 'NR>1{print $4, $6}'");
+      ss.split('\n').forEach(line => {
+        const m = line.match(/:([0-9]+)\s+.*pid=(\d+)/);
+        if (m) pidPortMap[m[2]] = m[1];
+      });
+    } catch (_) {}
+
+    const projects = list.map(p => {
+      const e = p.pm2_env || {};
+      const env = e.env || {};
+      const ep  = e.env_production || {};
+      const ed  = e.env_development || {};
+      // 1) Variable d'env PORT (toutes les variantes)
+      let port = env.PORT || env.port || ep.PORT || ep.port || ed.PORT || ed.port || '';
+      // 2) Port réseau réel via PID (ss)
+      if (!port && p.pid) port = pidPortMap[String(p.pid)] || '';
+      // 3) Lire le script et chercher app.listen(PORT) ou port: XXXX
+      if (!port && e.pm_exec_path) {
+        try {
+          const src = require('fs').readFileSync(e.pm_exec_path, 'utf-8');
+          const m = src.match(/(?:listen|port[:\s=]+)\s*[\(]?\s*(\d{2,5})/i);
+          if (m) port = m[1];
+        } catch (_) {}
+      }
+      return {
+        id: p.pm_id, name: p.name,
+        status: p.pm2_env ? p.pm2_env.status : 'unknown',
+        uptimeFormatted: (p.pm2_env && p.pm2_env.pm_uptime)
+          ? formatUptime(Math.floor((Date.now() - p.pm2_env.pm_uptime) / 1000)) : '—',
+        cpu: p.monit ? p.monit.cpu : 0,
+        mem: p.monit ? p.monit.memory : 0,
+        memFormatted: formatSize(p.monit ? p.monit.memory : 0),
+        restarts: p.pm2_env ? p.pm2_env.restart_time : 0,
+        pid: p.pid || '—',
+        script: (p.pm2_env && p.pm2_env.pm_exec_path) ? p.pm2_env.pm_exec_path : '—',
+        port: port || '—',
+      };
+    });
     res.json({ projects, total: projects.length, online: projects.filter(p => p.status === 'online').length });
   } catch (e) {
     res.json({ projects: [], total: 0, online: 0, error: 'PM2 non disponible : ' + e.message });
@@ -983,7 +1012,7 @@ tbody td{padding:9px 12px;font-size:12px}
     <div class="panel-hd"><span><i class="fas fa-table"></i>Projets</span></div>
     <div style="overflow-x:auto"><table><thead><tr><th>ID</th><th>Nom</th><th>Statut</th><th>Uptime</th><th>CPU</th><th>RAM</th><th>Restart</th><th>PID</th><th>Port</th><th>Actions</th></tr></thead><tbody id="pm2-tbody"><tr><td colspan="10" style="text-align:center;padding:24px;color:var(--muted)"><i class="fas fa-spinner spin"></i></td></tr></tbody></table></div>
   </div>
-  <div class="panel"><div class="panel-hd"><span>Scripts</span></div><div style="overflow-x:auto"><table><thead><tr><th>Nom</th><th>Chemin</th></tr></thead><tbody id="pm2-scripts"></tbody></table></div></div>
+  <div class="panel"><div class="panel-hd"><span>Scripts</span></div><div style="overflow-x:auto"><table><thead><tr><th>Nom</th><th>Chemin</th><th style="text-align:right">Port</th></tr></thead><tbody id="pm2-scripts"></tbody></table></div></div>
 </div>
 
 <!-- FICHIERS -->
@@ -1413,7 +1442,8 @@ async function loadPm2() {
       return '<tr><td><strong>#'+p.id+'</strong></td><td><strong>'+p.name+'</strong></td>'+
         '<td><span class="badge '+bc+'"><span class="bdot"></span>'+p.status+'</span></td>'+
         '<td>'+p.uptimeFormatted+'</td><td>'+p.cpu+'%</td><td>'+p.memFormatted+'</td>'+
-        '<td style="text-align:center">'+p.restarts+'</td><td>'+p.pid+'</td><td>'+p.port+'</td>'+
+        '<td style="text-align:center">'+p.restarts+'</td><td>'+p.pid+'</td>'+
+        '<td>'+(p.port&&p.port!=='—'?'<a href="http://localhost:'+p.port+'" target="_blank" style="color:var(--cyan);font-family:var(--mono);font-size:11px;font-weight:600;text-decoration:none;display:inline-flex;align-items:center;gap:4px" title="Ouvrir '+p.name+' sur :'+p.port+'"><i class="fas fa-arrow-up-right-from-square" style="font-size:9px;opacity:.7"></i>:'+p.port+'</a>':'<span style="color:var(--muted)">—</span>')+'</td>'+
         '<td><div class="pm2-acts">'+
         '<button class="btn-xs pm2-btn" data-action="start" data-id="'+p.id+'"><i class="fas fa-play"></i></button>'+
         '<button class="btn-xs stp pm2-btn" data-action="stop" data-id="'+p.id+'"><i class="fas fa-stop"></i></button>'+
@@ -1421,7 +1451,13 @@ async function loadPm2() {
         '</div></td></tr>';
     }).join('')||'<tr><td colspan="10" style="text-align:center;padding:20px;color:var(--muted)">Aucun projet</td></tr>';
     document.getElementById('pm2-scripts').innerHTML=(d.projects||[]).map(function(p){
-      return '<tr><td><strong>'+p.name+'</strong></td><td style="font-size:10px;color:var(--muted);font-family:var(--mono)">'+p.script+'</td></tr>';
+      var nameCell = p.port&&p.port!=='—'
+        ? '<a href="http://localhost:'+p.port+'" target="_blank" style="color:var(--cyan);text-decoration:none;font-weight:600;display:inline-flex;align-items:center;gap:5px" title="http://localhost:'+p.port+'">'+p.name+' <i class="fas fa-external-link-alt" style="font-size:9px;opacity:.6"></i></a>'
+        : '<strong>'+p.name+'</strong>';
+      var portCell = p.port&&p.port!=='—'
+        ? '<a href="http://localhost:'+p.port+'" target="_blank" style="font-family:var(--mono);font-size:10px;color:var(--cyan);background:rgba(6,182,212,0.1);padding:2px 8px;border-radius:5px;border:1px solid rgba(6,182,212,0.25);text-decoration:none;white-space:nowrap" title="http://localhost:'+p.port+'">:'+p.port+'</a>'
+        : '<span style="color:var(--muted);font-size:10px">—</span>';
+      return '<tr><td>'+nameCell+'</td><td style="font-size:10px;color:var(--muted);font-family:var(--mono)">'+p.script+'</td><td style="text-align:right">'+portCell+'</td></tr>';
     }).join('');
   } catch(e){document.getElementById('pm2-tbody').innerHTML='<tr><td colspan="10" style="text-align:center;padding:22px;color:var(--red)">Erreur : '+e.message+'</td></tr>';}
 }
